@@ -19,6 +19,7 @@ test("briefing stays inside realtime field limits", () => {
   assert.equal(briefing.reply.language, "zh");
   assert.ok(briefing.chips.includes("峰哥，我想链接了"));
   assert.ok(utf8Size(briefing.reply.direct_prompt.direction) <= 1000);
+  assert.doesNotMatch(briefing.reply.direct_prompt.direction, /可落|还真是/);
   assert.ok(utf8Size(BLESSING) <= 2000);
 });
 
