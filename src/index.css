@@ -15,7 +15,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { margin: 0; min-height: 100%; background: var(--bg); }
+html, body, #root { margin: 0; min-height: 100%; background: #070605; }
+#root { min-height: 100dvh; display: grid; place-items: center; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: 0.45; }
@@ -30,8 +31,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
 
 .cover {
   position: relative;
-  height: 100dvh;
+  width: min(100vw, 430px, calc(100dvh * 9 / 19.5));
+  height: min(100dvh, calc(430px * 19.5 / 9));
   overflow: hidden;
+  background: #070605;
 }
 .cover-photo {
   position: absolute;
@@ -85,7 +88,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
   margin: 8px 0 16px;
   font-family: var(--serif);
   font-weight: 700;
-  font-size: clamp(48px, 12vw, 72px);
+  font-size: 52px;
   line-height: 0.95;
 }
 .cover-copy h1 em {
@@ -115,6 +118,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
 }
 
 .room {
+  width: 100%;
   min-height: 100dvh;
   display: grid;
   place-items: center;
@@ -122,8 +126,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
 }
 .room-stage {
   position: relative;
-  width: min(100vw, calc(100dvh * 9 / 16));
-  height: 100dvh;
+  width: min(100vw, 430px, calc(100dvh * 9 / 19.5));
+  height: min(100dvh, calc(430px * 19.5 / 9));
   overflow: hidden;
   background: #070605;
 }
