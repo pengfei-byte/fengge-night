@@ -46,12 +46,17 @@ export class R2Client {
     );
   }
 
-  say(text, turnId = `turn_${crypto.randomUUID()}`) {
-    this.send("turn.submit", {
+  say(text, extra = {}) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return null;
+    const turnId = extra.turnId || `turn_${crypto.randomUUID()}`;
+    const data = {
       turn_id: turnId,
       text,
       client_sent_at_ms: Date.now(),
-    });
+    };
+    if (extra.language) data.language = extra.language;
+    if (extra.direct_prompt) data.direct_prompt = extra.direct_prompt;
+    this.send("turn.submit", data);
     return turnId;
   }
 

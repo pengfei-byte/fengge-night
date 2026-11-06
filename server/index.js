@@ -3,18 +3,16 @@ import cors from "cors";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadMatch } from "./match.js";
-import { COMMENTATOR, characterPrompt, scenePrompt } from "./prompts.js";
+import { characterPrompt, FENG, scenePrompt, sessionBriefing } from "./persona.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const BASE = process.env.POPVID_BASE_URL || "https://popvid.ai/api/public/v1";
 const KEY = process.env.POPVID_API_KEY;
-const SEED_BASE = (process.env.SEED_BASE_URL || "").replace(/\/$/, "");
 const SEED_IMAGE_URL = (process.env.SEED_IMAGE_URL || "").trim();
+const VOICE_REF_URL = (process.env.VOICE_REF_URL || "").trim();
 const PUBLIC_BASE = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
-const ANCHOR_ASSET = "/commentator.jpg";
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_SESSIONS || 3);
 const CONNECT_LIMIT = Number(process.env.CONNECT_LIMIT_PER_IP || 12);
 const CONNECT_WINDOW_MS = 15 * 60 * 1000;
@@ -24,7 +22,7 @@ const sessions = new Map();
 const connectHits = new Map();
 
 if (!KEY) {
-  console.warn("Missing POPVID_API_KEY — broadcast will fall back to teleprompter");
+  console.warn("Missing POPVID_API_KEY — 峰哥连不上实时画面");
 }
 
 app.set("trust proxy", true);
@@ -42,20 +40,14 @@ function publicOrigin(req) {
   return `${proto}://${host}`;
 }
 
-function seedUrl(req) {
-  if (SEED_IMAGE_URL) return SEED_IMAGE_URL;
-  if (SEED_BASE) return `${SEED_BASE}${ANCHOR_ASSET}`;
+function assetUrl(req, envUrl, pathname) {
+  if (envUrl) return envUrl;
   const origin = publicOrigin(req);
-  return origin ? `${origin}${ANCHOR_ASSET}` : null;
+  return origin ? `${origin}${pathname}` : "";
 }
 
 function clientIp(req) {
-  return (
-    req.headers["cf-connecting-ip"] ||
-    req.ip ||
-    req.socket?.remoteAddress ||
-    "unknown"
-  );
+  return req.headers["cf-connecting-ip"] || req.ip || req.socket?.remoteAddress || "unknown";
 }
 
 function allowConnect(ip) {
@@ -74,25 +66,40 @@ function authHeaders() {
   };
 }
 
-async function createPopvidSession({ match, dropSeed = false, req = null }) {
+function viewerError(raw, status) {
+  const code = raw?.code || "upstream";
+  const messages = {
+    no_capacity: "他那边占线。过一会儿再叫。",
+    budget_exhausted: "这把额度用完了。换一把钥匙或者等额度回来。",
+    content_rejected: "这张形象图没过审。换一张不含敏感内容的 3:4 照片再试。",
+    unauthorized: "钥匙不对，服务端拒绝了。",
+    invalid_request: raw?.message || "请求没通过。检查形象图和音色地址。",
+  };
+  return {
+    code,
+    message: messages[code] || raw?.message || "视频暂时打不通。再试一次。",
+    status,
+  };
+}
+
+async function createRealtimeSession(req) {
+  const seed = assetUrl(req, SEED_IMAGE_URL, FENG.portrait);
+  const voice = assetUrl(req, VOICE_REF_URL, "/fengge-voice.m4a");
   const body = {
     model: "r2-realtime-v1",
     character: {
-      name: COMMENTATOR.name,
+      name: FENG.name,
       prompt: characterPrompt(),
     },
     scene: { prompt: scenePrompt() },
-    language: "en",
-    limits: { max_duration_ms: 300_000, max_turns: 80, turn_rate_per_min: 30 },
+    language: "zh",
+    limits: { max_duration_ms: HARD_CLOSE_MS, max_turns: 40, turn_rate_per_min: 16 },
     credentials_ttl_ms: 600_000,
-    metadata: {
-      product: "pitchside",
-      match: match.id,
-    },
+    metadata: { product: "fengge-night" },
   };
-  const url = dropSeed ? null : seedUrl(req);
-  if (url) body.seed_image_url = url;
-  console.log("[broadcast] seed", url || "(none)");
+  if (seed) body.seed_image_url = seed;
+  if (voice) body.character.voice_ref_url = voice;
+  console.log("[feng] seed", seed || "(none)", "voice", voice || "(default)");
 
   const res = await fetch(`${BASE}/connections`, {
     method: "POST",
@@ -100,7 +107,7 @@ async function createPopvidSession({ match, dropSeed = false, req = null }) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  return { ok: res.ok, status: res.status, data, seed };
 }
 
 async function closeRemote(sessionId) {
@@ -128,126 +135,94 @@ function trackSession({ sessionId, ip }) {
   });
 }
 
-function publicMatch(match) {
-  return {
-    id: match.id,
-    videoId: match.videoId,
-    duration: match.duration,
-    competition: match.competition,
-    title: match.title,
-    venue: match.venue,
-    kickoff: match.kickoff,
-    filmed: match.filmed,
-    video: match.video,
-    startAt: match.startAt,
-    cues: match.cues,
-  };
-}
-
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    product: "pitchside",
-    title: "Pitchside",
+    product: "fengge-night",
+    title: FENG.title,
+    name: FENG.name,
     realtime: Boolean(KEY),
     sessions: sessions.size,
-    seed: Boolean(SEED_IMAGE_URL || SEED_BASE || PUBLIC_BASE),
+    portrait: FENG.portrait,
+    briefing: sessionBriefing(),
+    hard_close_ms: HARD_CLOSE_MS,
   });
 });
 
-app.get("/api/match", (_req, res) => {
-  res.json(publicMatch(loadMatch()));
-});
-
-app.post("/api/broadcast", async (req, res) => {
-  const ip = clientIp(req);
-  const match = loadMatch();
+app.post("/api/calls", async (req, res) => {
+  const briefing = sessionBriefing();
   const payload = {
-    mode: "text",
-    character: COMMENTATOR,
-    match: publicMatch(match),
+    character: FENG,
+    briefing,
+    hard_close_ms: HARD_CLOSE_MS,
   };
 
-  if (req.body?.prefer_text || !KEY) {
-    return res.json({
+  if (!KEY) {
+    return res.status(503).json({
       ...payload,
-      reason: KEY ? "prefer_text" : "misconfigured",
-      message: KEY ? "The live picture is off. Try again." : "The live line is not ready. Try again shortly.",
+      error: { code: "misconfigured", message: "服务端还没配实时钥匙。" },
     });
   }
 
   if (sessions.size >= MAX_CONCURRENT) {
     return res.status(429).json({
       ...payload,
-      error: {
-        code: "busy",
-        message: "The studio is full right now. Try again in a moment.",
-        retry_after_ms: 8000,
-      },
+      error: { code: "busy", message: "这会儿人满了。过一会儿再叫。", retry_after_ms: 8000 },
     });
   }
 
+  const ip = clientIp(req);
   if (!allowConnect(ip)) {
     return res.status(429).json({
       ...payload,
+      error: { code: "rate_limited", message: "这个网络叫得太勤。过一分钟再来。", retry_after_ms: 60_000 },
+    });
+  }
+
+  const seedPreview = assetUrl(req, SEED_IMAGE_URL, FENG.portrait);
+  if (!seedPreview) {
+    return res.status(503).json({
+      ...payload,
       error: {
-        code: "rate_limited",
-        message: "Too many joins from this network. Try again in a minute.",
-        retry_after_ms: 60_000,
+        code: "no_seed",
+        message: "形象图必须是公网地址。本地请设置 PUBLIC_BASE_URL，或直接给 SEED_IMAGE_URL。",
       },
     });
   }
 
   let result;
   try {
-    result = await createPopvidSession({ match, req });
+    result = await createRealtimeSession(req);
     for (let attempt = 0; attempt < 3 && !result.ok && result.data?.error?.code === "no_capacity"; attempt += 1) {
       const wait = Number(result.data?.error?.retry_after_ms || 5000);
       await new Promise((resolve) => setTimeout(resolve, wait));
-      result = await createPopvidSession({ match, req });
+      result = await createRealtimeSession(req);
     }
   } catch (err) {
-    console.error("[broadcast] fetch threw", err);
+    console.error("[feng] fetch threw", err);
     return res.status(502).json({
       ...payload,
-      error: { code: "upstream_unreachable", message: `Studio unreachable: ${err.message}` },
+      error: { code: "upstream_unreachable", message: `线路暂时不通：${err.message}` },
     });
   }
 
-  if (
-    !result.ok &&
-    result.data?.error?.code !== "no_capacity" &&
-    result.data?.error?.code !== "unauthorized"
-  ) {
-    result = await createPopvidSession({ match, dropSeed: true, req });
-  }
-
   if (!result.ok) {
-    const raw = result.data?.error || {};
-    const err = {
-      code: raw.code || "upstream",
-      message:
-        raw.code === "no_capacity"
-          ? "The live line is busy right now. Try again in a moment."
-          : raw.message || "The live line didn't connect. Try again.",
-      status: result.status,
-    };
-    console.error("[broadcast] rejected", result.status, err);
+    const err = viewerError(result.data?.error, result.status);
+    console.error("[feng] rejected", result.status, err.code, err.message);
     return res.status(result.status || 502).json({ ...payload, error: err });
   }
 
-  const { session, credentials } = result.data;
+  const { session, credentials } = result.data || {};
   if (!session?.session_id || !credentials) {
     return res.status(502).json({
       ...payload,
-      error: { code: "bad_payload", message: "The live session did not start. Try again." },
+      error: { code: "bad_payload", message: "会话没建起来。再试一次。" },
     });
   }
 
   trackSession({ sessionId: session.session_id, ip });
-
   res.status(201).json({
-    mode: "realtime",
+    ...payload,
     credentials,
     session: {
       session_id: session.session_id,
@@ -255,8 +230,6 @@ app.post("/api/broadcast", async (req, res) => {
       media: session.media,
       hard_close_ms: HARD_CLOSE_MS,
     },
-    character: COMMENTATOR,
-    match: publicMatch(match),
   });
 });
 
@@ -289,7 +262,7 @@ export default app;
 
 if (!process.env.VERCEL) {
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Pitchside on http://0.0.0.0:${PORT}`);
+    console.log(`亡命夜谈 http://0.0.0.0:${PORT}`);
   });
 
   setInterval(() => {

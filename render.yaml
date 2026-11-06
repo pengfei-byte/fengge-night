@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: pitchside-wembley
+    name: fengge-night
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build

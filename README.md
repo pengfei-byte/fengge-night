@@ -1,51 +1,39 @@
-# WIRE 24
+# 亡命夜谈
 
-A 24-hour rolling newscast. The anchor is **Elena Voss**, a PopVid Realtime character. Viewers do not type. Once the picture is up, she reads politics, business, finance, and entertainment on her own.
+峰哥亡命天涯的非官方 AI 分身。中文用户开口，他在镜头前用他自己的口气回。
 
-PopVid sessions last about five minutes. When the hour ends, the next edition starts automatically.
+实时画面走 PopVid Realtime。钥匙只留在服务端。形象是一张 576×768 的竖图，音色是一段他自己说话的短样本。
 
-## News sources
-
-The server pulls public RSS — headlines and summaries only, no full articles:
-
-| Desk | Sources |
-| --- | --- |
-| Politics | BBC World / Politics, NPR, The Guardian World |
-| Business | BBC Business, NPR Business, The Guardian Business |
-| Finance | MarketWatch, NPR, Guardian Economics |
-| Entertainment | BBC Entertainment, NPR Arts, Guardian Culture |
-
-Google News RSS is a backup aggregator.
-
-## Anchor likeness
-
-`public/anchor.jpg` is a 576×768 (3:4) still. The lobby uses that photo. PopVid uses the same file as `seed_image_url`, so the live face is generated from it.
-
-PopVid fetches the image from the public internet. `localhost` will not work. On a deployed HTTPS host, `/anchor.jpg` is picked up automatically. For local realtime looks, set `PUBLIC_BASE_URL` to a public origin that serves that file (a Cloudflare tunnel is enough).
-
-## Run locally
+## 本地跑
 
 ```bash
-cp .env.example .env   # add POPVID_API_KEY
+cp .env.example .env   # 填 POPVID_API_KEY
 npm install
 npm test
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. Click **Watch live** once (browsers block unmuted autoplay). After that the hour runs itself.
+打开 `http://127.0.0.1:5173`，点「进入直播间」。画面是竖屏直播：弹幕往上滚，他的话在底部字幕。
 
-- The API key stays on the server.
-- Without a key, the teleprompter still reads the wires.
+PopVid 会自己去拉形象图和音色，`localhost` 拉不到。本地要出脸，把 `PUBLIC_BASE_URL` 设成一个公网 HTTPS 源，这个源要能访问到 `/fengge.jpg` 和 `/fengge-voice.m4a`。Cloudflare Tunnel 就够。部署到 Render 之后，用站点自己的域名即可，不必再填。
 
-## Deploy
+也可以直接给绝对地址：
 
-Express serves the built frontend and keeps the key. Do not use a static host.
+- `SEED_IMAGE_URL`
+- `VOICE_REF_URL`
 
-Same path as NITE: push the repo, then Render Blueprint from `render.yaml` (free Web Service). Health check is `/api/health`. After it is live, PopVid fetches `/anchor.jpg` from that HTTPS origin automatically.
+音色样本最好是他一个人连续说 5 到 10 秒，开头就是人声。仓库里的 `public/fengge-voice.m4a` 取自公开访谈末段「来自峰哥的赛博祝福」，大约 9 秒。要换音色，传到一个新地址，不要覆盖旧文件。
 
-Needed env (set `POPVID_API_KEY` in the Render dashboard only, never in Git):
+## 他怎么说话
 
-- `POPVID_API_KEY`
-- `POPVID_BASE_URL=https://popvid.ai/api/public/v1`
-- `NODE_ENV=production`
-- optional `PUBLIC_BASE_URL` if the public origin is not the request host
+人设按公开视频和两份语料整理来写，不背整段原文：
+
+- 先把话翻过来，再给一句落地的判断
+- 口头禅一轮最多一个：这是个好事儿啊、面子能当饭吃吗、想连接了
+- 对方说「想链接了」，按「想连接了」接，不纠正用词
+- 对方要祝福或二次元峰哥，把那段首页家人的祝福原句说完
+- 语录合集的速度：先甩「这是个好事儿啊」，再补半句，常以「还真是」收住
+
+第一句是锁死的开场。后面每轮只锁神态，台词由模型按人设现编。
+
+这场大约五分钟，退出直播间或把页面丢到后台太久都会停。
