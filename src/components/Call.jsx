@@ -28,6 +28,8 @@ export default function Call({ health, onLeave }) {
   const leaveRef = useRef(false);
   const genRef = useRef(0);
   const captionRef = useRef("");
+  const recentFengRef = useRef([]);
+  const echoMuteUntilRef = useRef(0);
   const hiddenTimerRef = useRef(null);
   const connectTimerRef = useRef(null);
   const visibleTimerRef = useRef(null);
@@ -53,6 +55,8 @@ export default function Call({ health, onLeave }) {
   const [draft, setDraft] = useState("");
   const [heard, setHeard] = useState("");
   const [listening, setListening] = useState(false);
+  const [remoteTalking, setRemoteTalking] = useState(false);
+  const [ears, setEars] = useState(false);
   const [leftMs, setLeftMs] = useState(health?.hard_close_ms || 300_000);
   const [startedAt, setStartedAt] = useState(0);
 
@@ -76,10 +80,12 @@ export default function Call({ health, onLeave }) {
     busyRef.current = false;
     setBusy(false);
     setStatus("他在听");
+    if (!remoteTalkingRef.current) echoMuteUntilRef.current = Date.now() + 1600;
   }, []);
 
   const hold = useCallback(() => {
     busyRef.current = true;
+    echoMuteUntilRef.current = Date.now() + 60_000;
     setBusy(true);
     setStatus("他在说");
   }, []);
@@ -175,9 +181,12 @@ export default function Call({ health, onLeave }) {
       setStatus("主播正在赶来");
       setFail(null);
       setLive(false);
+      setRemoteTalking(false);
       setBarrage([]);
       setCaption("");
       captionRef.current = "";
+      recentFengRef.current = [];
+      echoMuteUntilRef.current = Date.now() + 1600;
       try {
         const data = await startCall();
         if (cancelled || gen !== genRef.current) {
@@ -193,6 +202,8 @@ export default function Call({ health, onLeave }) {
             unwatchRef.current?.();
             unwatchRef.current = watchRemoteSpeech(stream, (talking) => {
               remoteTalkingRef.current = talking;
+              echoMuteUntilRef.current = talking ? Date.now() + 60_000 : Date.now() + 1600;
+              setRemoteTalking(talking);
               if (!busyRef.current || talking) return;
               clearTimeout(visibleTimerRef.current);
               visibleTimerRef.current = setTimeout(free, 700);
@@ -206,6 +217,7 @@ export default function Call({ health, onLeave }) {
             }
             if (msg.type === "turn.text" && d.text) {
               captionRef.current = d.text;
+              recentFengRef.current = [...recentFengRef.current, d.text].slice(-6);
               setCaption(d.text);
               hold();
               clearTimeout(visibleTimerRef.current);
@@ -319,7 +331,17 @@ export default function Call({ health, onLeave }) {
   }, [shutdown]);
 
   useEffect(() => {
-    if (phase !== "live" || busy || !speechSupported()) {
+    if (phase !== "live" || busy || remoteTalking) {
+      setEars(false);
+      return undefined;
+    }
+    const wait = Math.max(1400, echoMuteUntilRef.current - Date.now());
+    const timer = setTimeout(() => setEars(true), wait);
+    return () => clearTimeout(timer);
+  }, [busy, phase, remoteTalking]);
+
+  useEffect(() => {
+    if (phase !== "live" || busy || !ears || !speechSupported()) {
       try {
         recRef.current?.stop();
       } catch {
@@ -331,12 +353,14 @@ export default function Call({ health, onLeave }) {
     }
     let stopped = false;
     const begin = () => {
-      if (stopped || leaveRef.current || busyRef.current || recRef.current) return;
+      if (stopped || leaveRef.current || busyRef.current || Date.now() < echoMuteUntilRef.current || recRef.current) return;
       const rec = createRecognizer({
         onResult: ({ all, finalText }) => {
-          if (busyRef.current) return;
+          if (busyRef.current || Date.now() < echoMuteUntilRef.current) return;
+          const recent = recentFengRef.current;
+          if (isEchoOf(all, recent) || (finalText && isEchoOf(finalText, recent))) return;
           setHeard(all);
-          if (finalText && !isEchoOf(finalText, captionRef.current)) speak(finalText);
+          if (finalText) speak(finalText);
         },
         onError: (ev) => {
           if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed") {
@@ -348,7 +372,7 @@ export default function Call({ health, onLeave }) {
         onEnd: () => {
           if (recRef.current === rec) recRef.current = null;
           setListening(false);
-          if (stopped || leaveRef.current || busyRef.current) return;
+          if (stopped || leaveRef.current || busyRef.current || Date.now() < echoMuteUntilRef.current) return;
           window.setTimeout(begin, 280);
         },
       });
@@ -372,7 +396,7 @@ export default function Call({ health, onLeave }) {
       }
       recRef.current = null;
     };
-  }, [busy, phase, speak]);
+  }, [busy, ears, phase, speak]);
 
   const hangup = () => {
     leaveRef.current = true;
